@@ -1,0 +1,579 @@
+/******** 
+ * Kajonwit 
+ * IOT-M1
+*********/
+
+// Load Wi-Fi library
+#include <WiFi.h>
+#include <Wire.h>
+#include <RTC.h>
+#include <SPI.h>
+#include <Adafruit_Sensor.h>
+#include <Adafruit_BME280.h>
+static DS1307 RTC;
+// Replace with your network credentials
+const char* ssid     = "IOT-M1 Wi-Fi";
+const char* password = "123456789";
+
+
+// Set web server port number to 80
+WiFiServer server(80);
+
+#define DS1307_I2C_ADDRESS 0x68
+#define Buzzer 14
+
+#define SEALEVELPRESSURE_HPA (1013.25)
+Adafruit_BME280 bme; // I2C
+unsigned long delayTime;
+
+//ตัวแปร Int ชั่วโมง, นาที
+int value_H = 0;
+int value_M = 0;
+
+// Variable to store the HTTP request
+String header;
+String read_Hours;
+String read_Minutes;
+char read_time;
+
+// Auxiliar variables to store the current output state
+String outputY1State = "off";
+String outputY2State = "off";
+String outputY3State = "off";
+String outputY4State = "off";
+
+String Hours;
+String Minutes;
+
+String Hours_start_timer_01;
+String Minutes_start_timer_01;
+String Hours_stop_timer_01;
+String Minutes_stop_timer_01;
+String start_temp_01;
+String stop_temp_01;
+
+String submit_timer1_strat = "on";
+String submit_timer1_stop = "on";
+String submit_temp1_start = "on";
+String submit_temp1_stop = "on";
+
+String Temp;
+bool SEToff_Temp;
+
+byte address_start_Hours_timer_1 = 0x08;
+byte address_start_Minutes_timer_1 = 0x09;
+byte address_stop_Hours_timer_1 = 0x0A;
+byte address_stop_Minutes_timer_1 = 0x0B;
+byte address_start_Temp_1 = 0x0C;
+byte address_stop_Temp_1 = 0x0D;
+
+// Assign output variables to GPIO pins
+const int outputY1 = 13;
+const int outputY2 = 18;
+const int outputY3 = 19;
+const int outputY4 = 23;
+const int ledPin =  LED_BUILTIN;
+
+void setup() {
+  Serial.begin(115200);
+  RTC.begin();      // DS1307
+  while (!Serial) ; // wait for serial
+  delay(200);
+
+  outputY1State = "off";
+  outputY2State = "off";
+  outputY3State = "off";
+  outputY4State = "off";
+
+  // default settings  BME280
+  unsigned status;
+  status = bme.begin();  
+  // You can also pass in a Wire library object like &Wire2
+  // status = bme.begin(0x76, &Wire2)
+  if (!status) {
+      Serial.println("Could not find a valid BME280 sensor, check wiring, address, sensor ID!");
+      Serial.print("SensorID was: 0x"); Serial.println(bme.sensorID(),16);
+      Serial.print("        ID of 0xFF probably means a bad address, a BMP 180 or BMP 085\n");
+      Serial.print("   ID of 0x56-0x58 represents a BMP 280,\n");
+      Serial.print("        ID of 0x60 represents a BME 280.\n");
+      Serial.print("        ID of 0x61 represents a BME 680.\n");
+      while (1) delay(10);
+  }
+
+  /***********************************************
+  Read EEPROM DS1807 
+  ************************************************/
+  Wire.begin(); 
+  Serial.println("done erasing");
+  Wire.endTransmission(); 
+
+  Wire.beginTransmission(DS1307_I2C_ADDRESS);
+
+  //  อ่านค่า Timer จากหน่วยความจำ
+  Wire.write(address_start_Hours_timer_1);
+  Wire.endTransmission();
+  Wire.requestFrom(DS1307_I2C_ADDRESS,1);
+  byte Hours_start_timer_1 = Wire.read();
+  Hours_start_timer_01 = Hours_start_timer_1;
+
+  Wire.write(address_start_Minutes_timer_1);
+  Wire.endTransmission();
+  Wire.requestFrom(DS1307_I2C_ADDRESS,1);
+  byte Minutes_start_timer_1 = Wire.read();
+  Minutes_start_timer_01 = Minutes_start_timer_1;
+  
+  Wire.write(address_stop_Hours_timer_1);
+  Wire.endTransmission();
+  Wire.requestFrom(DS1307_I2C_ADDRESS,1);
+  byte Hours_stop_timer_1 = Wire.read();
+  Hours_stop_timer_01 = Hours_stop_timer_1;
+  
+  Wire.write(address_stop_Minutes_timer_1);
+  Wire.endTransmission();
+  Wire.requestFrom(DS1307_I2C_ADDRESS,1);
+  byte Minutes_stop_timer_1 = Wire.read();
+  Minutes_stop_timer_01 = Minutes_stop_timer_1;
+  // จบขั้นตอนการอ่านค่า Timer
+
+  //  อ่านค่า อุณหภูมิ จากหน่วยความจำ
+  Wire.write(address_start_Temp_1);
+  Wire.endTransmission();
+  Wire.requestFrom(DS1307_I2C_ADDRESS,1);
+  byte start_temp_1 = Wire.read();
+  start_temp_01 = start_temp_1;
+  
+  Wire.write(address_stop_Temp_1);
+  Wire.endTransmission();
+  Wire.requestFrom(DS1307_I2C_ADDRESS,1);
+  byte stop_temp_1 = Wire.read();
+  stop_temp_01 = stop_temp_1;
+  // จบขั้นตอนการอ่านค่า อุณหภูมิ จากหน่วยความจำ
+
+  SEToff_Temp = false;  // ตั้งค่า off ในกรณีที่อุณภูมิเกินค่าที่ตั้งไว้
+
+  Serial.println(Hours_start_timer_01);
+  Serial.println(Minutes_start_timer_01);
+  Serial.println(Hours_stop_timer_01);
+  Serial.println(Minutes_stop_timer_01);
+
+  delay(500);
+  
+  // Initialize the output variables as outputs
+  pinMode(outputY1, OUTPUT);
+  pinMode(outputY2, OUTPUT);
+  pinMode(outputY3, OUTPUT);
+  pinMode(outputY4, OUTPUT);
+  pinMode(ledPin, OUTPUT);
+  // Set outputs to LOW
+  digitalWrite(outputY1, LOW);
+  digitalWrite(outputY2, LOW);
+  digitalWrite(outputY3, LOW);
+  digitalWrite(outputY4, LOW);
+ 
+  // Connect to Wi-Fi network with SSID and password
+  Serial.print("Setting AP (Access Point)…");
+  // Remove the password parameter, if you want the AP (Access Point) to be open
+  WiFi.softAP(ssid, password);
+
+  IPAddress IP = WiFi.softAPIP();
+  Serial.print("AP IP address: ");
+  Serial.println(IP);
+  
+  server.begin();
+
+  pinMode(Buzzer, OUTPUT);
+  digitalWrite(Buzzer, HIGH);
+  delay(100);
+  digitalWrite(Buzzer, LOW);
+}
+
+void loop(){
+  Hours = RTC.getHours();
+  Minutes = RTC.getMinutes();  
+  StartTime(Hours, Minutes);
+  StopTime(Hours, Minutes);
+  Temp = bme.readTemperature();
+  Mode_Temperature(Temp);
+  WiFiClient client = server.available();   // Listen for incoming clients
+  
+  if (client) {                             // If a new client connects,
+    Serial.println("New Client.");          // print a message out in the serial port
+    String currentLine = "";                // make a String to hold incoming data from the client
+
+    while (client.connected()) {            // loop while the client's connected
+      if (client.available()) {             // if there's bytes to read from the client,
+        char c = client.read();             // read a byte, then
+        Serial.write(c);                    // print it out the serial monitor
+        header += c;
+        
+        if (c == '\n') {                    // if the byte is a newline character
+          // if the current line is blank, you got two newline characters in a row.
+          // that's the end of the client HTTP request, so send a response:
+          read_Hours = "";
+          read_Minutes = "";
+          value_H = 0;
+          value_M = 0;
+          if (currentLine.length() == 0) {
+            // HTTP headers always start with a response code (e.g. HTTP/1.1 200 OK)
+            // and a content-type so the client knows what's coming, then a blank line:
+            client.println("HTTP/1.1 200 OK");
+            client.println("Content-type:text/html");
+            client.println("Connection: close");
+            client.println();
+
+            for(int i=0; i < 2; i++){
+              read_Hours += header[i+17];
+              read_Minutes += header[i+22];            
+            }
+            value_H = (array_to_int(read_Hours[0])*10) + array_to_int(read_Hours[1]);
+            value_M = (array_to_int(read_Minutes[0])*10) + array_to_int(read_Minutes[1]);
+                      
+            if (header.indexOf("GET /Y1/on") >= 0) {             // turns the GPIOs on and off
+              Serial.println("GPIO Y1 on");
+              outputY1State = "on";
+              digitalWrite(outputY1, LOW);
+            } else if (header.indexOf("GET /Y1/off") >= 0) {
+              Serial.println("GPIO Y1 off");
+              outputY1State = "off";
+              digitalWrite(outputY1, HIGH);
+              
+            } else if (header.indexOf("GET /Y2/on") >= 0) {
+              Serial.println("GPIO Y2 on");
+              outputY2State = "on";
+              digitalWrite(outputY2, LOW);
+            } else if (header.indexOf("GET /Y2/off") >= 0) {
+              Serial.println("GPIO Y2 off");
+              outputY2State = "off";
+              digitalWrite(outputY2, HIGH);
+
+            } else if (header.indexOf("GET /Y3/on") >= 0) {
+              Serial.println("GPIO Y3 on");
+              outputY3State = "on";
+              digitalWrite(outputY3, LOW);
+            } else if (header.indexOf("GET /Y3/off") >= 0) {
+              Serial.println("GPIO Y3 off");
+              outputY3State = "off";
+              digitalWrite(outputY3, HIGH);
+
+            } else if (header.indexOf("GET /Y4/on") >= 0) {
+              Serial.println("GPIO Y4 on");
+              outputY4State = "on";
+              digitalWrite(outputY4, LOW);
+            } else if (header.indexOf("GET /Y4/off") >= 0) {
+              Serial.println("GPIO Y4 off");
+              outputY4State = "off";
+              digitalWrite(outputY4, HIGH);
+            }  
+
+            if(header.indexOf("GET /get/?input1=") >= 0){                                  
+              submit_timer1_strat = "off";
+              Serial.println("Timer on");
+              digitalWrite(ledPin, LOW);
+              
+            } else if(header.indexOf("GET /get/?inpot1=")>= 0){
+              if(value_H < 24){
+                Wire.beginTransmission(DS1307_I2C_ADDRESS);
+                Wire.write(address_start_Hours_timer_1);  
+                Wire.write(value_H);                   
+                Wire.endTransmission();
+                Wire.beginTransmission(DS1307_I2C_ADDRESS);
+                Wire.write(address_start_Minutes_timer_1);  
+                Wire.write(value_M);                   
+                Wire.endTransmission(); 
+              }           
+              submit_timer1_strat = "on";
+              Serial.println("Timer off");
+              digitalWrite(ledPin, HIGH);
+              Refresh();
+            }
+
+            if(header.indexOf("GET /get/?input2=") >= 0){                                  
+              submit_timer1_stop = "off";
+              Serial.println("Timer_ on");
+              digitalWrite(ledPin, LOW);
+              
+            } else if(header.indexOf("GET /get/?inpot2=")>= 0){
+              if(value_H < 24){
+                Wire.beginTransmission(DS1307_I2C_ADDRESS);
+                Wire.write(address_stop_Hours_timer_1);  
+                Wire.write(value_H);                   
+                Wire.endTransmission();
+                Wire.beginTransmission(DS1307_I2C_ADDRESS);
+                Wire.write(address_stop_Minutes_timer_1);  
+                Wire.write(value_M);                   
+                Wire.endTransmission(); 
+              }           
+              submit_timer1_stop = "on";
+              Serial.println("Timer_ off");
+              digitalWrite(ledPin, HIGH);
+              Refresh();
+            }
+
+            //**************  Temp  **************//
+            if(header.indexOf("GET /get/?input3=") >= 0){                                  
+              submit_temp1_start = "off";
+              Serial.println("temp_ on");
+              digitalWrite(ledPin, LOW);
+              
+            } else if(header.indexOf("GET /get/?inpot3=")>= 0){
+              if(value_H != 88){
+                Wire.beginTransmission(DS1307_I2C_ADDRESS);
+                Wire.write(address_start_Temp_1);  
+                Wire.write(value_H);                   
+                Wire.endTransmission();
+              }           
+              submit_temp1_start = "on";
+              Serial.println("Temp_ off");
+              digitalWrite(ledPin, HIGH);
+              Refresh();
+            }
+            
+            if(header.indexOf("GET /get/?input4=") >= 0){                                  
+              submit_temp1_stop = "off";
+              Serial.println("temp_ on");
+              digitalWrite(ledPin, LOW);
+              
+            } else if(header.indexOf("GET /get/?inpot4=")>= 0){
+              if(value_H != 88){
+                Wire.beginTransmission(DS1307_I2C_ADDRESS);
+                Wire.write(address_stop_Temp_1);  
+                Wire.write(value_H);                   
+                Wire.endTransmission();
+              }           
+              submit_temp1_stop = "on";
+              Serial.println("Temp_ off");
+              digitalWrite(ledPin, HIGH);
+              Refresh();
+            }
+            //**************  Temp  **************//
+            
+            // Display the HTML web page
+            client.println("<!DOCTYPE html><html>");
+            client.println("<head><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">");
+            client.println("<link rel=\"icon\" href=\"data:,\">");
+            client.println("<meta http-equiv=\"refresh\" content=\"15\">");   // ให้ refresh ทุกๆ 20 วินาที
+            // CSS to style the on/off buttons 
+            // Feel free to change the background-color and font-size attributes to fit your preferences
+            client.println("<style>html { font-family: Helvetica; display: inline-block; margin: 0px auto; text-align: center;}");
+            client.println(".button { background-color: #4CAF50; border: none; color: white; padding: 16px 40px;");
+            client.println("text-decoration: none; font-size: 30px; margin: 2px; cursor: pointer;}");
+            client.println(".button2 {background-color: #555555;}</style></head>");
+            
+            // Web Page Heading
+            client.println("<body><h3>IOT-M1 Server</h3>"); 
+   
+            client.println("<p><h1>"+ Hours +":" + Minutes +"</h1></p>");   // แสดงเวลา
+            client.println("<p><h3 style=\"color:#776fa5;\">Temperature  "+ Temp +" c</h3></p>");   // แสดงอุณหภูมิ
+            // Display current state, and ON/OFF buttons for GPIO Y1  
+            // client.println("<p>GPIO Y1 - State " + outputY1State + "</p>");
+            // If the outputY1State is off, it displays the ON button       
+            if (outputY1State=="off") {
+              client.println("<p><a href=\"/Y1/on\"><button class=\"btn btn-primary\"><h1><label style=\"color:#FFCC00;\">ON</label></h1></button></a></p>");
+            } else {
+              client.println("<p><a href=\"/Y1/off\"><button class=\"btn btn-primary\"><h1><label style=\"color:#000000;\">OFF</label></h1></button></a></p>");
+            } 
+                     
+            if (outputY2State=="off") {
+              client.println("<p><a href=\"/Y2/on\"><button class=\"btn btn-primary\"><h1><label style=\"color:#FFCC00;\">ON</label></h1></button></a></p>");
+            } else {
+              client.println("<p><a href=\"/Y2/off\"><button class=\"btn btn-primary\"><h1><label style=\"color:#000000;\">OFF</label></h1></button></a></p>");
+            }
+      
+            if (outputY3State=="off") {
+              client.println("<p><a href=\"/Y3/on\"><button class=\"btn btn-primary\"><h1><label style=\"color:#FFCC00;\">ON</label></h1></button></a></p>");
+            } else {
+              client.println("<p><a href=\"/Y3/off\"><button class=\"btn btn-primary\"><h1><label style=\"color:#000000;\">OFF</label></h1></button></a></p>");
+            }
+ 
+            if (outputY4State=="off") {
+              client.println("<p><a href=\"/Y4/on\"><button class=\"btn btn-primary\"><h1><label style=\"color:#FFCC00;\">ON</label></h1></button></a></p>");
+            } else {
+              client.println("<p><a href=\"/Y4/off\"><button class=\"btn btn-primary\"><h1><label style=\"color:#000000;\">OFF</label></h1></button></a></p>");
+            }
+
+            //client.println("<p><label style=\"color:#776fa5;\">Set Time</label></p>");
+            client.println("<p><label style=\"color:#776fa5;\">Timer  start | "+  Hours_start_timer_01 +":" + Minutes_start_timer_01 + "     stop | "+  Hours_stop_timer_01 +":" + Minutes_stop_timer_01 + "</label></p>");
+
+            //*********************************      ตั้งค่าเวลา      *****************************************//
+            if(submit_timer1_strat == "off"){
+                client.println("<form action=\"/get/\">start Time : <input type=\"time\" name=\"inpot1\"><input type=\"submit\" style=\"color:#FFCC00;\" value=\"Submit\"></form>");  //****8
+            } else if(submit_timer1_strat == "on"){
+                client.println("<form action=\"/get/\">start Time : <input type=\"time\" name=\"input1\"><input type=\"submit\" value=\"Submit\"></form>");  //*****
+            }
+
+            client.println("<p><label style=\"color:#776fa5;\"></label></p>");  // เว้นบรรทัด
+
+            if(submit_timer1_stop == "off"){
+                client.println("<form action=\"/get/\">stop Time : <input type=\"time\" name=\"inpot2\"><input type=\"submit\" style=\"color:#FFCC00;\" value=\"Submit\"></form>");  //****8
+            } else if(submit_timer1_stop == "on"){
+                client.println("<form action=\"/get/\">stop Time : <input type=\"time\" name=\"input2\"><input type=\"submit\" value=\"Submit\"></form>");  //*****
+            }
+            //*********************************     ตั้งค่าเวลา     *****************************************//
+            
+            //client.println("<p><label style=\"color:#776fa5;\">Set Temperature</label></p>");
+            client.println("<p><label style=\"color:#776fa5;\">Temp start | "+ start_temp_01 +"c      Temp stop | "+ stop_temp_01 + " c</label></p>");
+            
+            //*********************************    ตั้งค่าอุณหภูมิ    *****************************************//
+            if(submit_temp1_start == "off"){
+                client.println("<form action=\"/get/\">start Temperature : <input type=\"number\" name=\"inpot3\" min=\"20\" max=\"40\" step=\"1\" style=\"color:#700f75;\"><input type=\"submit\" style=\"color:#FFCC00;\" value=\"Submit\"></form>");  //****8
+            } else if(submit_temp1_start == "on"){
+                client.println("<form action=\"/get/\">start Temperature : <input type=\"number\" name=\"input3\" min=\"20\" max=\"40\" step=\"1\" style=\"color:#700f75;\"><input type=\"submit\" value=\"Submit\"></form>");  //*****
+            }
+
+            client.println("<p><label style=\"color:#776fa5;\"></label></p>");  // เว้นบรรทัด
+
+            if(submit_temp1_stop == "off"){
+                client.println("<form action=\"/get/\">stop Temperature : <input type=\"number\" name=\"inpot4\" min=\"20\" max=\"40\" step=\"1\" style=\"color:#700f75;\"><input type=\"submit\" style=\"color:#FFCC00;\" value=\"Submit\"></form>");  //****8
+            } else if(submit_temp1_stop == "on"){
+                client.println("<form action=\"/get/\">stop Temperature : <input type=\"number\" name=\"input4\" min=\"20\" max=\"40\" step=\"1\" style=\"color:#700f75;\"><input type=\"submit\" value=\"Submit\"></form>");  //*****
+            }
+            //*********************************    ตั้งค่าอุณหภูมิ    *****************************************//
+             
+            client.println("</body></html>");     
+            
+            // The HTTP response ends with another blank line
+            client.println();
+            // Break out of the while loop
+            break;
+          } else { // if you got a newline, then clear currentLine
+            currentLine = "";
+          }
+        } else if (c != '\r') {  // if you got anything else but a carriage return character,
+          currentLine += c;      // add it to the end of the currentLine
+        }
+      }
+    }
+    // Clear the header variable
+    header = "";
+    // Close the connection
+    client.stop();
+    Serial.println("Client disconnected.");
+    Serial.println("");
+  }
+}
+
+int array_to_int(char text){
+  int value;
+
+  if(text == '0'){
+    value = 0;
+  }
+  else if(text == '1'){
+    value = 1;
+  }
+  else if(text == '2'){
+    value = 2;
+  }
+  else if(text == '3'){
+    value = 3;
+  }
+  else if(text == '4'){
+    value = 4;
+  }
+  else if(text == '5'){
+    value = 5;
+  }
+  else if(text == '6'){
+    value = 6;
+  }
+  else if(text == '7'){
+    value = 7;
+  }
+  else if(text == '8'){
+    value = 8;
+  }
+  else if(text == '9'){
+    value = 9;
+  }
+  
+  return(value);
+}
+
+void StartTime(String H, String M){
+  if(H == Hours_start_timer_01){
+    if(M == Minutes_start_timer_01){
+      digitalWrite(outputY1,HIGH);
+      outputY1State=="off";
+    }
+  }
+}
+
+void StopTime(String H, String M){
+  if(H == Hours_stop_timer_01){
+    if(M == Minutes_stop_timer_01){
+      digitalWrite(outputY1,LOW);
+      outputY1State=="on";
+    }
+  }
+}
+
+void Mode_Temperature(String Temperature){
+  if(SEToff_Temp==true){
+    if(Temperature <= stop_temp_01){
+      digitalWrite(outputY2,LOW);
+      outputY2State=="off";
+      SEToff_Temp = false;
+      Serial.println("Temperature Reset");
+    }
+  }
+  else{
+    if(Temperature >= start_temp_01){
+      digitalWrite(outputY2,HIGH);
+      outputY2State=="on";
+      SEToff_Temp = true;
+      Serial.println("Temperature Over");
+    }
+  }
+}
+
+void Refresh(){
+  Wire.begin(); 
+  Serial.println("done erasing");
+  Wire.endTransmission(); 
+
+  Wire.beginTransmission(DS1307_I2C_ADDRESS);
+  
+  //  อ่านค่า Timer จากหน่วยความจำ
+  Wire.write(address_start_Hours_timer_1);
+  Wire.endTransmission();
+  Wire.requestFrom(DS1307_I2C_ADDRESS,1);
+  byte Hours_start_timer_1 = Wire.read();
+  Hours_start_timer_01 = Hours_start_timer_1;
+
+  Wire.write(address_start_Minutes_timer_1);
+  Wire.endTransmission();
+  Wire.requestFrom(DS1307_I2C_ADDRESS,1);
+  byte Minutes_start_timer_1 = Wire.read();
+  Minutes_start_timer_01 = Minutes_start_timer_1;
+  
+  Wire.write(address_stop_Hours_timer_1);
+  Wire.endTransmission();
+  Wire.requestFrom(DS1307_I2C_ADDRESS,1);
+  byte Hours_stop_timer_1 = Wire.read();
+  Hours_stop_timer_01 = Hours_stop_timer_1;
+  
+  Wire.write(address_stop_Minutes_timer_1);
+  Wire.endTransmission();
+  Wire.requestFrom(DS1307_I2C_ADDRESS,1);
+  byte Minutes_stop_timer_1 = Wire.read();
+  Minutes_stop_timer_01 = Minutes_stop_timer_1;
+  // จบขั้นตอนการอ่านค่า Timer
+
+  //  อ่านค่า อุณหภูมิ จากหน่วยความจำ
+  Wire.write(address_start_Temp_1);
+  Wire.endTransmission();
+  Wire.requestFrom(DS1307_I2C_ADDRESS,1);
+  byte start_temp_1 = Wire.read();
+  start_temp_01 = start_temp_1;
+  
+  Wire.write(address_stop_Temp_1);
+  Wire.endTransmission();
+  Wire.requestFrom(DS1307_I2C_ADDRESS,1);
+  byte stop_temp_1 = Wire.read();
+  stop_temp_01 = stop_temp_1;
+  // จบขั้นตอนการอ่านค่า อุณหภูมิ จากหน่วยความจำ
+
+  digitalWrite(Buzzer, HIGH);
+  delay(60);
+  digitalWrite(Buzzer, LOW);
+}
