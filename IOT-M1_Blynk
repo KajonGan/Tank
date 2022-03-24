@@ -1,0 +1,640 @@
+/*******************************************************
+        - Library Manager 
+        - ArduinoJson ใช้ version 5.13.2 เท่านั้น -
+********************************************************/
+#define BLYNK_PRINT Serial
+#include <BlynkSimpleEsp32.h>
+#include <DNSServer.h>
+#include <WiFi.h>
+#include <WiFiClient.h>
+
+#include <FS.h>                   
+#include <WiFiManager.h>          
+
+#ifdef ESP32
+  #include <SPIFFS.h>
+#endif
+
+#include <ArduinoJson.h>    // version 5.13.2 เท่านั้น
+
+#include <EmonLib.h>
+#include <SPI.h>
+#include <Ethernet.h>
+#include <PCF8574.h>
+
+#define DE_RE_PIN 17
+
+char blynk_token[40] = "";
+bool shouldSaveConfig = false;
+
+//***** Input *****//
+const int InputX1 = 27;
+const int InputX2 = 26;
+const int InputX3 = 25;
+const int InputX4 = 33;
+
+//***** Output *****//
+#define Buzzer 14
+const int outputY1 = 13;
+const int outputY2 = 18;
+const int outputY3 = 19;
+const int outputY4 = 23;
+
+const int AP_Config = 35; // ใช้เป็นปุ่มกด เพื่อเข้า AP Config ได้ตามความต้องการของผู้ใช้ (S1)
+const int switch_2 = 36;
+const int LED_CONNECT = 15;
+const int LED_STATUS = 4;
+
+char server[] = "blynk.kota-iot.com";
+unsigned int port = 8080;
+
+BlynkTimer timer;
+//********************* WidgetLED ************************//
+WidgetLED LEDstatus(V0);
+WidgetLED led1(V1);
+WidgetLED led2(V2);
+WidgetLED led3(V3);
+WidgetLED led4(V4);
+WidgetLED led5(V5);
+WidgetLED led6(V6);
+WidgetLED led7(V7);
+WidgetLED led8(V8);
+WidgetLED led9(V9);
+WidgetLED led10(V10);
+WidgetLED led11(V11);
+WidgetLED led12(V12);
+WidgetLED senser(V13);
+//********************************************************//
+PCF8574 ExRelay1(0x20);  //Relay Port 1
+
+//********************** SetData ***********************//
+float SHT20_T = 0;
+float SHT20_H = 0;
+float input_set_T;
+float input_set_H;
+
+float compensation_In01 = 0;    //ค่าชดเชยตอนลง
+float compensation_In02 = 0;    //ค่าชดเชยตอนลง
+float com_In01;
+float com_In02;
+
+int numberIn1 = 0;
+int numberIn2 = 0;
+int numberIn3 = 0;
+int numberIn4 = 0;
+
+int setNumber1 = 1;
+int setNumber2 = 1;
+
+int Lock1 = true;
+int Lock2 = true;
+int Lock3 = true;
+int Lock4 = true;
+
+int true_SENSER = false;
+//********************************************************//
+
+//********************** STATUS **************************//
+void blink_LEDstatus_Widget(){
+  if (LEDstatus.getValue()) {
+    LEDstatus.off();
+    digitalWrite(LED_STATUS, LOW);
+  } else {
+    LEDstatus.on();
+    digitalWrite(LED_STATUS, HIGH);
+  }
+}
+//********************************************************//
+void blink_led1_Widget(){
+  if (led1.getValue()) {
+    led1.off();
+  } else {
+    led1.on();
+  }
+}
+void blink_led2_Widget(){
+  if (led2.getValue()) {
+    led2.off();
+  } else {
+    led2.on();
+  }
+}
+void blink_led3_Widget(){
+  if (led3.getValue()) {
+    led3.off();
+  } else {
+    led3.on();
+  }
+}
+void blink_led4_Widget(){
+  if (led4.getValue()) {
+    led4.off();
+  } else {
+    led4.on();
+  }
+}
+void blink_led5_Widget(){
+  if (led5.getValue()) {
+    led5.off();
+  } else {
+    led5.on();
+  }
+}
+void blink_led6_Widget(){
+  if (led6.getValue()) {
+    led6.off();
+  } else {
+    led6.on();
+  }
+}
+void blink_led7_Widget(){
+  if (led7.getValue()) {
+    led7.off();
+  } else {
+    led7.on();
+  }
+}
+void blink_led8_Widget(){
+  if (led8.getValue()) {
+    led8.off();
+  } else {
+    led8.on();
+  }
+}
+void blink_led9_Widget(){
+  if (led9.getValue()) {
+    led9.off();
+  } else {
+    led9.on();
+  }
+}
+void blink_led10_Widget(){
+  if (led10.getValue()) {
+    led10.off();
+  } else {
+    led10.on();
+  }
+}
+void blink_led11_Widget(){
+  if (led11.getValue()) {
+    led11.off();
+  } else {
+    led11.on();
+  }
+}
+void blink_led12_Widget(){
+  if (led12.getValue()) {
+    led12.off();
+  } else {
+    led12.on();
+  }
+}
+
+//************** switch **************//
+BLYNK_WRITE(V21){
+  if (param.asInt()) {
+    led1.on();
+    digitalWrite(outputY1, HIGH);
+  } else {
+    led1.off();
+    digitalWrite(outputY1, LOW);
+  }
+}
+BLYNK_WRITE(V22){
+  if (param.asInt()) {
+    led2.on();
+    digitalWrite(outputY2, HIGH);
+  } else {
+    led2.off();
+    digitalWrite(outputY2, LOW);
+  }
+}
+BLYNK_WRITE(V23){
+  if (param.asInt()) {
+    led3.on();
+    digitalWrite(outputY3, HIGH);
+  } else {
+    led3.off();
+    digitalWrite(outputY3, LOW);
+  }
+}
+BLYNK_WRITE(V24){
+  if (param.asInt()) {
+    led4.on();
+    digitalWrite(outputY4, HIGH);
+  } else {
+    led4.off();
+    digitalWrite(outputY4, LOW);
+  }
+}
+BLYNK_WRITE(V25){
+  if (param.asInt()) {
+    led5.on();
+    ExRelay1.digitalWrite(P0,LOW);
+  } else {
+    led5.off();
+    ExRelay1.digitalWrite(P0,HIGH);
+  }
+}
+BLYNK_WRITE(V26){
+  if (param.asInt()) {
+    led6.on();
+    ExRelay1.digitalWrite(P1,LOW);
+  } else {
+    led6.off();
+    ExRelay1.digitalWrite(P1,HIGH);
+  }
+}
+BLYNK_WRITE(V27){
+  if (param.asInt()) {
+    led7.on();
+    ExRelay1.digitalWrite(P2,LOW);
+  } else {
+    led7.off();
+    ExRelay1.digitalWrite(P2,HIGH);
+  }
+}
+BLYNK_WRITE(V28){
+  if (param.asInt()) {
+    led8.on();
+    ExRelay1.digitalWrite(P3,LOW);
+  } else {
+    led8.off();
+    ExRelay1.digitalWrite(P3,HIGH);
+  }
+}
+BLYNK_WRITE(V29){
+  if (param.asInt()) {
+    led9.on();
+    ExRelay1.digitalWrite(P4,LOW);
+  } else {
+    led9.off();
+    ExRelay1.digitalWrite(P4,HIGH);
+  }
+}
+BLYNK_WRITE(V30){
+  if (param.asInt()) {
+    led10.on();
+    ExRelay1.digitalWrite(P5,LOW);
+  } else {
+    led10.off();
+    ExRelay1.digitalWrite(P5,HIGH);
+  }
+}
+BLYNK_WRITE(V31){
+  if (param.asInt()) {
+    led11.on();
+    ExRelay1.digitalWrite(P6,LOW);
+  } else {
+    led11.off();
+    ExRelay1.digitalWrite(P6,HIGH);
+  }
+}
+BLYNK_WRITE(V32){
+  if (param.asInt()) {
+    led12.on();
+    ExRelay1.digitalWrite(P7,LOW);
+  } else {
+    led12.off();
+    ExRelay1.digitalWrite(P7,HIGH);
+  }
+}
+
+//************** Auto **************//
+BLYNK_WRITE(V33){
+  input_set_T = param.asFloat();
+}
+BLYNK_WRITE(V34){
+  input_set_H = param.asFloat();
+} 
+BLYNK_WRITE(V35){
+  setNumber1 = param.asInt();    
+  if(setNumber1 < 1){     // ห้ามต่ำกว่า 1
+    setNumber1 = 1;
+  }
+}
+BLYNK_WRITE(V36){
+  setNumber2 = param.asInt();    
+  if(setNumber2 < 1){     // ห้ามต่ำกว่า 1
+    setNumber2 = 1;
+  }
+}
+
+BLYNK_WRITE(V37){     // มี senser ตรวจสอบอุณหภูมิ
+  if (param.asInt()) {
+    true_SENSER = true;
+    senser.on();
+  } else {
+    true_SENSER = false;
+    senser.off();
+  }
+}
+
+BLYNK_WRITE(V38){
+  compensation_In01 = param.asFloat();    //ตั้งค่าชดเชย
+}
+BLYNK_WRITE(V39){
+  compensation_In02 = param.asFloat();    //ตั้งค่าชดเชย
+}
+//******** Read switch Input *********//
+void ReadDigital_switch_01(){
+  if(digitalRead(InputX1)){
+    if(Lock1){
+      numberIn1 = numberIn1 + 1;
+    }
+    Lock1 = false;
+  }else {
+    Lock1 = true;
+  }  
+  if(setNumber1 < numberIn1){
+      led3.on();
+      digitalWrite(outputY3, HIGH);
+      numberIn1 = 0;
+  }
+}
+void ReadDigital_switch_02(){
+  if(digitalRead(InputX2)){
+    if(Lock2){
+      numberIn2 = numberIn2 + 1;
+    }
+    Lock2 = false;
+  }else {
+    Lock2 = true;
+  }  
+  if(setNumber2 < numberIn2){
+      led4.on();
+      digitalWrite(outputY4, HIGH);
+      numberIn2 = 0;
+  }
+}
+void ReadDigital_switch_03(){
+  if(digitalRead(InputX3)==0){
+    if(Lock3){
+      numberIn3 = numberIn3 + 1;
+    }
+    Lock3 = false;
+  }else {
+    Lock3 = true;
+  }  
+}
+void ReadDigital_switch_04(){
+  if(digitalRead(InputX4)==0){
+    if(Lock4){
+      numberIn4 = numberIn4 + 1;
+    }
+    Lock4 = false;
+  }else {
+    Lock4 = true;
+  }  
+}
+//*************************************//
+
+//************* SUM T&H ****************//
+void sum_T(){
+  if(input_set_T <= SHT20_T){
+    led1.on();
+    digitalWrite(outputY1, HIGH);
+  } else {
+    if(input_set_T > (SHT20_T+compensation_In01)){
+      led1.off();
+      digitalWrite(outputY1, LOW);
+    }
+  } 
+}
+void sum_H(){
+  if(input_set_H <= SHT20_H){
+    led2.on();
+    digitalWrite(outputY2, HIGH);
+  }else {
+    if(input_set_H > (SHT20_H+compensation_In02)){
+      led2.off();
+      digitalWrite(outputY2, LOW);
+    }
+  }
+}
+//*************************************//
+
+void SetupExRelay1(){   // ExRelay ภายนอก
+  ExRelay1.begin();
+  ExRelay1.pinMode(P0,OUTPUT);    ExRelay1.digitalWrite(P0,HIGH);
+  ExRelay1.pinMode(P1,OUTPUT);    ExRelay1.digitalWrite(P1,HIGH);
+  ExRelay1.pinMode(P2,OUTPUT);    ExRelay1.digitalWrite(P2,HIGH);
+  ExRelay1.pinMode(P3,OUTPUT);    ExRelay1.digitalWrite(P3,HIGH);
+  ExRelay1.pinMode(P4,OUTPUT);    ExRelay1.digitalWrite(P4,HIGH);
+  ExRelay1.pinMode(P5,OUTPUT);    ExRelay1.digitalWrite(P5,HIGH);
+  ExRelay1.pinMode(P6,OUTPUT);    ExRelay1.digitalWrite(P6,HIGH);
+  ExRelay1.pinMode(P7,OUTPUT);    ExRelay1.digitalWrite(P7,HIGH);
+}
+
+void LoopBlynk(){
+  BLYNK_WRITE(V21);
+  BLYNK_WRITE(V22);
+  BLYNK_WRITE(V23);
+  BLYNK_WRITE(V24);
+  BLYNK_WRITE(V25);
+  BLYNK_WRITE(V26);
+  BLYNK_WRITE(V27);
+  BLYNK_WRITE(V28);
+  BLYNK_WRITE(V29);
+  BLYNK_WRITE(V30);
+  BLYNK_WRITE(V31);
+  BLYNK_WRITE(V32);
+  BLYNK_WRITE(V33);
+  BLYNK_WRITE(V34);
+  BLYNK_WRITE(V35);
+  BLYNK_WRITE(V36);
+  BLYNK_WRITE(V37);     // เปิด-ปิด ฟังก์ชั่น การตั้งค่า ON-OFF อุณหภูมิ, ความชื้น
+  BLYNK_WRITE(V38);
+  BLYNK_WRITE(V39);
+  BLYNK_WRITE(V40);
+  
+  if(true_SENSER){      // เมื่อ เปิดใช้งานฟังก์ชั่น การตั้งค่า ON-OFF อุณหภูมิ, ความชื้น
+    sum_T();
+    sum_H();
+  }
+  
+  blink_LEDstatus_Widget();
+  
+  Blynk.virtualWrite(V41, SHT20_T);                 // แสดงค่าอุณหภูมิ
+  Blynk.virtualWrite(V42, SHT20_H);                 // แสดงค่าความชื้น
+  Blynk.virtualWrite(V43, input_set_T);             // แสดงค่าอุณหภูมิที่ตั้ง
+  Blynk.virtualWrite(V44, input_set_H);             // แสดงค่าความชื้นที่ตั้ง
+  Blynk.virtualWrite(V45, compensation_In01);       // แสดงค่าชดเชยอุณหภูมิ
+  Blynk.virtualWrite(V46, compensation_In02);       // แสดงค่าชดเชยความชื้น
+  Blynk.virtualWrite(V47, setNumber1);              // แสดงค่าที่ตั้ง counter X1
+  Blynk.virtualWrite(V48, setNumber2);              // แสดงค่าที่ตั้ง counter X2
+  Blynk.virtualWrite(V49, numberIn1);               // แสดงค่า counter X1
+  Blynk.virtualWrite(V50, numberIn2);               // แสดงค่า counter X2
+  Blynk.virtualWrite(V51, numberIn3);               // แสดงค่า counter X3
+  Blynk.virtualWrite(V52, numberIn4);               // แสดงค่า counter X4
+  
+  ReadDigital_switch_01();    // เรียกใช้งาน switch X1
+  ReadDigital_switch_02();    // เรียกใช้งาน switch X2
+  ReadDigital_switch_03();    // เรียกใช้งาน switch X3
+  ReadDigital_switch_04();    // เรียกใช้งาน switch X4
+}
+//************** อ่านค่า อุณหภูมิ&ความชื้น (XY_MD02) ****************//
+void readXY_MD02() {
+   uint8_t buff[] = {
+    0x01, // Devices Address
+    0x04, // Function code
+    0x00, // Start Address HIGH
+    0x01, // Start Address LOW
+    0x00, // Quantity HIGH
+    0x02, // Quantity LOW
+    0x20, // CRC LOW
+    0x0B  // CRC HIGH
+  };
+
+  Serial2.write(buff, sizeof(buff));
+  Serial2.flush(); // wait MODE_SEND completed
+
+  delay(50);
+
+  if (Serial2.find("\x01\x04")) {
+    uint8_t n = Serial2.read();
+    Serial.println(n);
+    if (n != 4) {
+      Serial.println("Error data size");
+      return;
+    }
+    SHT20_T = ((uint16_t)(Serial2.read() << 8) | Serial2.read()) / 10.0;
+    SHT20_H = ((uint16_t)(Serial2.read() << 8) | Serial2.read()) / 10.0;     
+  } else {
+    Serial.println("ERROR Timeout");
+    return;
+  }
+}
+//*************************************//
+
+void saveConfigCallback () {
+  Serial.println("Should save config");
+  shouldSaveConfig = true;
+}
+
+void setup(){  
+  Serial.begin(115200);
+  pinMode(AP_Config, INPUT_PULLUP);
+  pinMode(Buzzer, OUTPUT);
+  pinMode(LED_CONNECT, OUTPUT);
+  
+  digitalWrite(LED_CONNECT, HIGH);
+  
+  Serial.println("KOTA MARINE");
+  //read configuration from FS json
+  if (SPIFFS.begin(true)) {
+    Serial.println("mounted file system");
+    if (SPIFFS.exists("/config.json")) {
+      //file exists, reading and loading
+      Serial.println("reading config file");
+      File configFile = SPIFFS.open("/config.json", "r");
+      if (configFile) {
+        Serial.println("opened config file");
+        size_t size = configFile.size();
+        // Allocate a buffer to store contents of the file.
+        std::unique_ptr<char[]> buf(new char[size]);
+
+        configFile.readBytes(buf.get(), size);
+        DynamicJsonBuffer jsonBuffer;
+        JsonObject& json = jsonBuffer.parseObject(buf.get());
+        json.printTo(Serial);
+        if (json.success()) {
+          Serial.println("\nparsed json");
+          strcpy(blynk_token, json["blynk_token"]);
+
+        } else {
+          Serial.println("failed to load json config");
+        }
+        //configFile.close();
+      }
+    }
+  } else {
+    Serial.println("failed to mount FS");
+  }
+
+  WiFiManagerParameter custom_blynk_token("blynk", "blynk token", blynk_token, 34);
+  WiFiManager wifiManager;
+  wifiManager.setSaveConfigCallback(saveConfigCallback);
+  wifiManager.addParameter(&custom_blynk_token);
+  digitalWrite(LED_CONNECT, LOW);
+  delay(1000);
+  
+  for (int i = 10; i > -1; i--) {         // นับเวลาถอยหลัง 5 วินาทีก่อนกดปุ่ม AP Config
+    digitalWrite(Buzzer, HIGH);
+    digitalWrite(LED_CONNECT, HIGH);
+    delay(250);
+    digitalWrite(Buzzer, LOW);
+    digitalWrite(LED_CONNECT, LOW);
+    delay(250);
+    Serial.print (String(i) + " ");       //แสดงข้อความใน Serial Monitor
+    digitalWrite(LED_CONNECT, HIGH);
+  }
+
+  if (digitalRead(AP_Config) == LOW) {     // กด รีเซต wifi
+    wifiManager.resetSettings();
+  }
+
+  if (!wifiManager.autoConnect("KOTA MARINE SETUP WIFI")) {   // ชื่อ WIFI "KOTA MARINE SETUP WIFI" 
+    Serial.println("failed to connect and hit timeout");
+    delay(3000);
+    ESP.restart();
+    delay(5000);
+  }
+
+  Serial.println("wifi connected");
+  strcpy(blynk_token, custom_blynk_token.getValue());
+
+  //save the custom parameters to FS
+  if (shouldSaveConfig) {
+    Serial.println("saving config");
+    DynamicJsonBuffer jsonBuffer;
+    JsonObject& json = jsonBuffer.createObject();
+    json["blynk_token"] = blynk_token;
+    File configFile = SPIFFS.open("/config.json", "w");
+    
+    if (!configFile) {
+      Serial.println("failed to open config file for writing");
+    }
+
+    json.printTo(Serial);
+    json.printTo(configFile);
+    configFile.close();
+  }
+
+  Serial.println("local ip : ");  
+  Serial.println(WiFi.localIP());    // แสดงค่า IP การเชื่อมต่อ
+  Serial.print("Blynk Token : ");
+  Serial.println(blynk_token);       // แสดง token การเชื่อมต่อ
+
+  Blynk.config(blynk_token, server, port);     // เริ่มต้นการเชื่อมต่อกับ server
+  
+  timer.setInterval(1000L, LoopBlynk);         // ทำงานในฟังก์ชั่น LoopBlynk ทุกๆ 1000 ms(ทุกๆ 1 วินาที)
+
+  pinMode(InputX1, INPUT);
+  pinMode(InputX2, INPUT);
+  pinMode(InputX3, INPUT);
+  pinMode(InputX4, INPUT);
+  
+  pinMode(outputY1, OUTPUT);
+  pinMode(outputY2, OUTPUT);
+  pinMode(outputY3, OUTPUT);
+  pinMode(outputY4, OUTPUT);
+
+  pinMode(LED_STATUS, OUTPUT);
+
+  Serial2.begin(9600, SERIAL_8N1, 16, 17);  //อ่านค่า RS485 ด้วย Serial 2 ของบอร์ด ESP32 บอทเรต 9600 (ขา Rx=16, Tx=17 สำหรับ บอร์ด IOT M1)
+  Serial2.setTimeout(500);
+  
+  SetupExRelay1(); 
+  digitalWrite(Buzzer, HIGH);
+  delay(100);
+  digitalWrite(Buzzer, LOW);
+  digitalWrite(LED_CONNECT, LOW);
+  Serial.println("END SetupProgram");
+}
+
+void loop(){ 
+  readXY_MD02();
+  Blynk.run();
+  timer.run();
+}
